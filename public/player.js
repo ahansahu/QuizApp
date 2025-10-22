@@ -9,6 +9,12 @@ function App() {
   const [bet, setBet] = useState(0);
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [answeringStartTime, setAnsweringStartTime] = useState(null);
+  const [focusLossCount, setFocusLossCount] = useState(0);
+  const [totalFocusLostTime, setTotalFocusLostTime] = useState(0); // Track total time lost
+  const [focusLostAt, setFocusLostAt] = useState(null); // Track when focus was lost
+  const [gracePeriodActive, setGracePeriodActive] = useState(false); // 4-second grace period at start of answering
 
   const registerPlayer = async () => {
     if (!playerName.trim()) {
@@ -37,9 +43,11 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/api/player/state/${playerId}`);
       if (!res.ok) {
-        // Player might have been reset
         localStorage.removeItem('playerId');
         setPlayerId(null);
+        setBet(0);
+        setAnswer('');
+        setIsSubmitting(false);
         return;
       }
       const data = await res.json();
@@ -57,10 +65,82 @@ function App() {
     }
   }, [playerId]);
 
-  // Reset bet to 0 when phase changes to betting
   useEffect(() => {
-    if (state?.phase === 'betting') {
+    const handleBlur = () => {
+      // Only track if we're in answering phase AND haven't submitted yet AND grace period is over
+      if (state?.phase === 'answering' && !state?.hasSubmittedAnswer && !gracePeriodActive) {
+        setFocusLossCount(prev => prev + 1);
+        setFocusLostAt(Date.now()); // Record when focus was lost
+      }
+    };
+
+    const handleFocus = () => {
+      // Calculate how long focus was lost
+      if (focusLostAt && state?.phase === 'answering' && !state?.hasSubmittedAnswer) {
+        const timeLost = (Date.now() - focusLostAt) / 1000; // in seconds
+        setTotalFocusLostTime(prev => prev + timeLost);
+        
+        // Report to server with both count and duration
+        fetch(`${API_URL}/api/player/log-focus-loss`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            playerId, 
+            focusLossCount: focusLossCount + 1,
+            totalFocusLostTime: totalFocusLostTime + timeLost,
+            round: state.currentRound
+          })
+        }).catch(err => console.error('Failed to log focus loss:', err));
+        
+        setFocusLostAt(null);
+      }
+    };
+
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('focus', handleFocus);
+    
+    return () => {
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [state?.phase, state?.hasSubmittedAnswer, state?.currentRound, playerId, focusLossCount, focusLostAt, totalFocusLostTime, gracePeriodActive]);
+
+  useEffect(() => {
+    if (state?.phase === 'betting' || state?.phase === 'auction') {
       setBet(0);
+    }
+  }, [state?.phase, state?.currentRound]);
+
+  useEffect(() => {
+    if (state?.phase === 'answering') {
+      setAnswer('');
+      setIsSubmitting(false);
+      setFocusLossCount(0);
+      setTotalFocusLostTime(0); // Reset time counter
+      setFocusLostAt(null); // Reset focus lost timestamp
+      
+      if (!answeringStartTime) {
+        setAnsweringStartTime(Date.now());
+      }
+
+      // Start 4-second grace period
+      setGracePeriodActive(true);
+      
+      // After grace period, check if player is already away
+      const gracePeriodTimer = setTimeout(() => {
+        setGracePeriodActive(false);
+        
+        // Check if document is currently not focused
+        if (!document.hasFocus()) {
+          setFocusLossCount(1);
+          setFocusLostAt(Date.now());
+        }
+      }, 4000); // 4 second grace period
+      
+      return () => clearTimeout(gracePeriodTimer);
+    } else {
+      setAnsweringStartTime(null);
+      setGracePeriodActive(false);
     }
   }, [state?.phase, state?.currentRound]);
 
@@ -78,18 +158,28 @@ function App() {
   };
 
   const submitAnswer = async () => {
-    if (!answer.trim()) return;
+    if (!answer.trim() || isSubmitting) return;
+    
+    setIsSubmitting(true);
+    
+    const timeTaken = answeringStartTime 
+      ? ((Date.now() - answeringStartTime) / 1000).toFixed(4)
+      : null;
     
     try {
       await fetch(`${API_URL}/api/player/submit-answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerId, answer })
+        body: JSON.stringify({ 
+          playerId, 
+          answer,
+          timeTaken
+        })
       });
-      // Don't clear answer - keep it to display
       fetchState();
     } catch (err) {
       setError('Failed to submit answer');
+      setIsSubmitting(false);
     }
   };
 
@@ -151,7 +241,23 @@ function App() {
 
   if (state.phase === 'betting') {
     const maxBet = Math.max(0, state.player.points);
-    const canBet = maxBet >= 2; // Can only bet if you have 2 or more points
+    const canBet = maxBet >= 2;
+    
+    const increaseBet = () => {
+      if (bet === 0) {
+        setBet(2);
+      } else if (bet < maxBet) {
+        setBet(bet + 1);
+      }
+    };
+
+    const decreaseBet = () => {
+      if (bet === 2) {
+        setBet(0);
+      } else if (bet > 0) {
+        setBet(bet - 1);
+      }
+    };
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
@@ -166,40 +272,38 @@ function App() {
           
           {canBet ? (
             <>
-              <input
-                type="range"
-                min="0"
-                max={maxBet}
-                step="1"
-                value={Math.max(0, Math.min(bet, maxBet))}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value);
-                  // Skip 1, only allow 0 or 2+
-                  if (val === 1) {
-                    setBet(bet < 1 ? 0 : 2);
-                  } else {
-                    setBet(val);
-                  }
-                }}
-                className="w-full mb-4 h-3 rounded-lg appearance-none cursor-pointer"
-                disabled={state.hasSubmittedBet}
-              />
-              
-              <div className="text-center mb-6">
-                <div className="text-5xl font-bold text-blue-400">{bet === 1 ? 0 : bet}</div>
-                <div className="text-gray-400">points</div>
-                {bet === 0 && (
-                  <div className="text-sm text-green-400 mt-2 font-semibold">
-                    ✨ +1 point if correct!
-                  </div>
-                )}
-                <div className="text-xs text-gray-500 mt-2">
-                  (Bets of 1 point not allowed)
+              <div className="flex items-center justify-center gap-4 mb-6">
+                <button
+                  onClick={decreaseBet}
+                  disabled={state.hasSubmittedBet || bet === 0}
+                  className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 text-white w-16 h-16 rounded-lg text-3xl font-bold transition flex items-center justify-center"
+                >
+                  −
+                </button>
+                <div className="text-center min-w-32">
+                  <div className="text-6xl font-bold text-blue-400">{bet}</div>
+                  <div className="text-gray-400 text-sm">points</div>
                 </div>
+                <button
+                  onClick={increaseBet}
+                  disabled={state.hasSubmittedBet || bet >= maxBet}
+                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white w-16 h-16 rounded-lg text-3xl font-bold transition flex items-center justify-center"
+                >
+                  +
+                </button>
+              </div>
+              
+              {bet === 0 && (
+                <div className="text-center text-sm text-green-400 mb-4 font-semibold">
+                  ✨ +1 point if correct!
+                </div>
+              )}
+              <div className="text-center text-xs text-gray-500 mb-4">
+                (Bets of 1 point not allowed)
               </div>
               
               <button
-                onClick={() => submitBet(bet === 1 ? 0 : bet)}
+                onClick={() => submitBet(bet)}
                 disabled={state.hasSubmittedBet}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white py-4 rounded-lg font-semibold text-lg transition"
               >
@@ -240,14 +344,18 @@ function App() {
   }
 
   if (state.phase === 'answering') {
-    const submittedAnswer = state.result?.bet !== undefined ? state.hasSubmittedAnswer : false;
+    const submittedAnswer = state.hasSubmittedAnswer;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
         <div className="bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl p-8 max-w-md w-full">
           <div className="text-center mb-6">
             <h2 className="text-2xl font-bold mb-2 text-white">{state.player.name}</h2>
-            <div className="text-gray-400">Your bet: {state.result?.bet ?? 0} points</div>
+            {state.bettingEnabled && state.result?.bet !== undefined ? (
+              <div className="text-gray-400">Your bet: {state.result.bet} points</div>
+            ) : (
+              <div className="text-gray-400">Answer the question</div>
+            )}
             <div className="text-sm text-gray-500 mt-2">Round {state.currentRound}</div>
           </div>
           
@@ -269,10 +377,10 @@ function App() {
           {!submittedAnswer && (
             <button
               onClick={submitAnswer}
-              disabled={!answer.trim()}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white py-4 rounded-lg font-semibold text-lg transition"
+              disabled={!answer.trim() || isSubmitting || submittedAnswer}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-4 rounded-lg font-semibold text-lg transition"
             >
-              Submit Answer
+              {isSubmitting ? 'Submitting...' : 'Submit Answer'}
             </button>
           )}
           
@@ -291,44 +399,68 @@ function App() {
   if (state.phase === 'auction') {
     const maxBet = Math.max(0, state.player.points);
     
+    const increaseBid = () => {
+      if (bet < maxBet) {
+        setBet(bet + 1);
+      }
+    };
+
+    const decreaseBid = () => {
+      if (bet > 0) {
+        setBet(bet - 1);
+      }
+    };
+    
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
-        <div className="bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+      <div className="min-h-screen bg-gradient-to-br from-yellow-900 via-yellow-800 to-orange-900 flex items-center justify-center p-4">
+        <div className="bg-gray-900 border-4 border-yellow-500 rounded-2xl shadow-2xl p-8 max-w-md w-full">
           <div className="text-center mb-6">
-            <div className="text-6xl mb-4">🔨</div>
+            <div className="text-6xl mb-4 animate-pulse">🔨</div>
+            <div className="bg-yellow-500 text-gray-900 px-4 py-2 rounded-lg mb-4 font-black text-xl">
+              ⚡ AUCTION ROUND ⚡
+            </div>
             <h2 className="text-2xl font-bold mb-2 text-white">{state.player.name}</h2>
             <div className="text-4xl font-bold text-yellow-400">{state.player.points} points</div>
           </div>
           
-          <h3 className="text-xl font-semibold mb-4 text-center text-white">Place Your Bid</h3>
+          <div className="bg-yellow-500/20 border-2 border-yellow-500 rounded-lg p-4 mb-4">
+            <h3 className="text-xl font-bold text-center text-yellow-300 mb-2">🏆 Place Your Bid 🏆</h3>
+            <p className="text-sm text-center text-gray-300">Highest bid wins!</p>
+          </div>
           
-          <input
-            type="range"
-            min="0"
-            max={maxBet}
-            value={Math.min(bet, maxBet)}
-            onChange={(e) => setBet(parseInt(e.target.value))}
-            className="w-full mb-4 h-3 rounded-lg appearance-none cursor-pointer"
-            disabled={state.hasSubmittedBet}
-          />
-          
-          <div className="text-center mb-6">
-            <div className="text-5xl font-bold text-yellow-400">{Math.min(bet, maxBet)}</div>
-            <div className="text-gray-400">points</div>
+          <div className="flex items-center justify-center gap-4 mb-6">
+            <button
+              onClick={decreaseBid}
+              disabled={state.hasSubmittedBet || bet === 0}
+              className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 text-white w-16 h-16 rounded-lg text-3xl font-bold transition flex items-center justify-center"
+            >
+              −
+            </button>
+            <div className="text-center min-w-32">
+              <div className="text-6xl font-bold text-yellow-400">{bet}</div>
+              <div className="text-gray-300 text-sm">points</div>
+            </div>
+            <button
+              onClick={increaseBid}
+              disabled={state.hasSubmittedBet || bet >= maxBet}
+              className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white w-16 h-16 rounded-lg text-3xl font-bold transition flex items-center justify-center"
+            >
+              +
+            </button>
           </div>
           
           <button
-            onClick={() => submitBet(Math.min(bet, maxBet))}
+            onClick={() => submitBet(bet)}
             disabled={state.hasSubmittedBet}
-            className="w-full bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 text-white py-4 rounded-lg font-semibold text-lg transition"
+            className="w-full bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-600 text-gray-900 font-black py-4 rounded-lg text-xl transition transform hover:scale-105"
           >
-            {state.hasSubmittedBet ? '✓ Bid Submitted!' : 'Submit Bid'}
+            {state.hasSubmittedBet ? '✓ BID SUBMITTED!' : '🔨 SUBMIT BID'}
           </button>
           
           {state.hasSubmittedBet && (
-            <div className="mt-4 p-4 bg-gray-700 border border-gray-600 rounded-lg text-center">
-              <div className="text-yellow-400 font-semibold">
-                Waiting for auction to close...
+            <div className="mt-4 p-4 bg-yellow-500/20 border-2 border-yellow-500 rounded-lg text-center animate-pulse">
+              <div className="text-yellow-300 font-bold">
+                ⏳ Waiting for auction to close...
               </div>
             </div>
           )}

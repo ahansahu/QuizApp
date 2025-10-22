@@ -7,6 +7,7 @@ function App() {
   const [password, setPassword] = useState('');
   const [state, setState] = useState(null);
   const [error, setError] = useState('');
+  const [bettingEnabled, setBettingEnabled] = useState(true);
 
   const login = async () => {
     try {
@@ -33,6 +34,7 @@ function App() {
       const res = await fetch(`${API_URL}/api/master/state`);
       const data = await res.json();
       setState(data);
+      setBettingEnabled(data.bettingEnabled);
     } catch (err) {
       console.error('Failed to fetch state:', err);
     }
@@ -76,6 +78,16 @@ function App() {
     fetchState();
   };
 
+  const toggleBetting = async (enabled) => {
+    setBettingEnabled(enabled);
+    await fetch(`${API_URL}/api/master/toggle-betting`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    fetchState();
+  };
+
   const endGame = async () => {
     await fetch(`${API_URL}/api/master/end-game`, { method: 'POST' });
     fetchState();
@@ -95,6 +107,35 @@ function App() {
       await fetch(`${API_URL}/api/master/reset-game`, { method: 'POST' });
       fetchState();
     }
+  };
+
+  const removePlayer = async (playerId, playerName) => {
+    if (confirm(`Remove ${playerName} from the game?`)) {
+      await fetch(`${API_URL}/api/master/remove-player`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerId })
+      });
+      fetchState();
+    }
+  };
+
+  const adjustScore = async (playerId, change) => {
+    await fetch(`${API_URL}/api/master/adjust-score`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId, change })
+    });
+    fetchState();
+  };
+
+  const undoGrading = async (playerId) => {
+    await fetch(`${API_URL}/api/master/undo-grading`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId })
+    });
+    fetchState();
   };
 
   if (!authenticated) {
@@ -229,12 +270,33 @@ function App() {
               <h2 className="text-2xl font-semibold mb-4 text-white">Waiting for players to register...</h2>
               <p className="text-gray-400 mb-8 text-lg">{playerList.length} players registered</p>
               {playerList.length > 0 && (
-                <button
-                  onClick={startQuiz}
-                  className="bg-green-500 hover:bg-green-600 text-white px-8 py-4 rounded-lg text-xl font-semibold transition inline-flex items-center gap-2"
-                >
-                  ▶️ Start Quiz
-                </button>
+                <>
+                  <div className="flex items-center justify-center gap-3 mb-6 bg-gray-700 px-6 py-3 rounded-lg border border-gray-600 inline-flex">
+                    <span className="text-white text-base">Betting:</span>
+                    <button
+                      onClick={() => toggleBetting(!bettingEnabled)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        bettingEnabled ? 'bg-green-500' : 'bg-gray-500'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          bettingEnabled ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                    <span className={`text-base font-semibold ${bettingEnabled ? 'text-green-400' : 'text-gray-400'}`}>
+                      {bettingEnabled ? 'ON' : 'OFF'}
+                    </span>
+                  </div>
+                  <br />
+                  <button
+                    onClick={startQuiz}
+                    className="bg-green-500 hover:bg-green-600 text-white px-8 py-4 rounded-lg text-xl font-semibold transition inline-flex items-center gap-2"
+                  >
+                    ▶️ Start Quiz
+                  </button>
+                </>
               )}
             </div>
           )}
@@ -277,6 +339,24 @@ function App() {
                   >
                     🏁 End Game
                   </button>
+                  <div className="flex items-center gap-2 bg-gray-700 px-4 py-2 rounded-lg border border-gray-600">
+                    <span className="text-white text-sm">Betting:</span>
+                    <button
+                      onClick={() => toggleBetting(!bettingEnabled)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        bettingEnabled ? 'bg-green-500' : 'bg-gray-500'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          bettingEnabled ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                    <span className={`text-sm font-semibold ${bettingEnabled ? 'text-green-400' : 'text-gray-400'}`}>
+                      {bettingEnabled ? 'ON' : 'OFF'}
+                    </span>
+                  </div>
                 </>
               )}
               {state.phase === 'auction' && (
@@ -288,12 +368,44 @@ function App() {
                 </button>
               )}
               {state.phase === 'auction-results' && (
-                <button
-                  onClick={nextRound}
-                  className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold transition"
-                >
-                  ➡️ Next Round
-                </button>
+                <>
+                  <button
+                    onClick={nextRound}
+                    className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold transition"
+                  >
+                    ➡️ Next Round
+                  </button>
+                  <button
+                    onClick={startAuction}
+                    className="bg-yellow-500 hover:bg-yellow-600 text-white px-6 py-3 rounded-lg font-semibold transition"
+                  >
+                    🔨 Start Another Auction
+                  </button>
+                  <button
+                    onClick={endGame}
+                    className="bg-purple-500 hover:bg-purple-600 text-white px-6 py-3 rounded-lg font-semibold transition"
+                  >
+                    🏁 End Game
+                  </button>
+                  <div className="flex items-center gap-2 bg-gray-700 px-4 py-2 rounded-lg border border-gray-600">
+                    <span className="text-white text-sm">Betting:</span>
+                    <button
+                      onClick={() => toggleBetting(!bettingEnabled)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        bettingEnabled ? 'bg-green-500' : 'bg-gray-500'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          bettingEnabled ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                    <span className={`text-sm font-semibold ${bettingEnabled ? 'text-green-400' : 'text-gray-400'}`}>
+                      {bettingEnabled ? 'ON' : 'OFF'}
+                    </span>
+                  </div>
+                </>
               )}
               <button
                 onClick={resetGame}
@@ -322,47 +434,92 @@ function App() {
             <div className="space-y-3">
               {playerList.map(([id, player]) => (
                 <div key={id} className="bg-gray-800 border border-gray-600 p-4 rounded-lg shadow">
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div>
-                      <div className="font-semibold text-lg text-white">{player.name}</div>
-                      <div className="text-2xl font-bold text-blue-400">{player.points} points</div>
-                    </div>
-                    {state.answers[id] && (
-                      <div className="text-left md:text-right w-full md:w-auto">
-                        <div className="text-sm text-gray-400 mb-1">
-                          Bet: {state.answers[id].bet !== undefined ? state.answers[id].bet : 0} pts
-                        </div>
-                        <div className="font-medium mb-2 text-gray-300">
-                          Answer: {state.answers[id].answer || '(not submitted)'}
-                        </div>
-                        {state.answers[id].timeTaken && (
-                          <div className="text-xs text-blue-300 mb-2">
-                            ⏱️ Time: {state.answers[id].timeTaken}s
-                          </div>
-                        )}
-                        {state.phase === 'answering' && state.answers[id].answer && !state.answers[id].graded && (
-                          <div className="flex gap-2">
+                  <div className="flex justify-between items-start gap-4">
+                    {/* Left side - Player info */}
+                    <div className="flex-1">
+                      <div className="flex items-start justify-between mb-3">
+                        <div>
+                          <div className="font-semibold text-lg text-white mb-1">{player.name}</div>
+                          <div className="flex items-center gap-2">
                             <button
-                              onClick={() => markAnswer(id, true)}
-                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded transition flex-1 md:flex-none"
+                              onClick={() => adjustScore(id, 1)}
+                              className="bg-green-600 hover:bg-green-700 text-white w-6 h-6 rounded text-xs font-bold transition flex items-center justify-center"
+                              title="Add 1 point"
                             >
-                              ✓ Correct
+                              ▲
                             </button>
+                            <div className="text-xl font-bold text-blue-400">{player.points} pts</div>
                             <button
-                              onClick={() => markAnswer(id, false)}
-                              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded transition flex-1 md:flex-none"
+                              onClick={() => adjustScore(id, -1)}
+                              className="bg-red-600 hover:bg-red-700 text-white w-6 h-6 rounded text-xs font-bold transition flex items-center justify-center"
+                              title="Subtract 1 point"
                             >
-                              ✗ Wrong
+                              ▼
                             </button>
                           </div>
+                        </div>
+                        <button
+                          onClick={() => removePlayer(id, player.name)}
+                          className="bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded flex items-center justify-center transition"
+                          title="Remove player"
+                        >
+                          <span className="text-white text-lg">✕</span>
+                        </button>
+                      </div>
+                      
+                      {/* Always show bet and answer */}
+                      <div className="space-y-1 text-sm">
+                        <div className="text-gray-300">
+                          <span className="text-gray-500">Bet:</span> {state.answers[id]?.bet !== undefined ? `${state.answers[id].bet} pts` : 'Not submitted'}
+                        </div>
+                        <div className="text-gray-300">
+                          <span className="text-gray-500">Answer:</span> {state.answers[id]?.answer || 'Not submitted'}
+                        </div>
+                        
+                        {/* Show time and focus info only during/after answering */}
+                        {(state.phase === 'answering' || state.phase === 'results') && state.answers[id]?.timeTaken && (
+                          <div className="text-blue-300">
+                            <span className="text-gray-500">⏱️ Time:</span> {state.answers[id].timeTaken}s
+                          </div>
                         )}
-                        {state.answers[id].graded && (
-                          <div className="mt-2 p-2 bg-gray-600 rounded text-sm text-gray-300">
-                            ✓ Graded
+                        {(state.phase === 'answering' || state.phase === 'results') && state.answers[id]?.focusLosses > 0 && (
+                          <div className="text-yellow-300">
+                            <span className="text-gray-500">⚠️ Focus lost:</span> {state.answers[id].focusLosses} time{state.answers[id].focusLosses > 1 ? 's' : ''}
+                            {state.answers[id].focusLostTime && ` (${state.answers[id].focusLostTime}s away)`}
                           </div>
                         )}
                       </div>
-                    )}
+                      
+                      {/* Grading buttons - only during answering phase */}
+                      {state.phase === 'answering' && state.answers[id]?.answer && !state.answers[id]?.graded && (
+                        <div className="flex gap-2 mt-3">
+                          <button
+                            onClick={() => markAnswer(id, true)}
+                            className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded transition font-semibold"
+                          >
+                            ✓ Correct
+                          </button>
+                          <button
+                            onClick={() => markAnswer(id, false)}
+                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded transition font-semibold"
+                          >
+                            ✗ Wrong
+                          </button>
+                        </div>
+                      )}
+                      
+                      {/* Undo button - only when graded */}
+                      {state.answers[id]?.graded && (
+                        <div className="mt-3">
+                          <button
+                            onClick={() => undoGrading(id)}
+                            className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded transition font-semibold inline-block"
+                          >
+                            ↶ Undo Grading
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}

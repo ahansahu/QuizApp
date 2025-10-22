@@ -16,7 +16,8 @@ const gameState = {
   currentRound: 0,
   phase: 'registration', // registration, betting, answering, results, auction, auction-results, leaderboard
   answers: {},
-  auctionWinner: null
+  auctionWinner: null,
+  bettingEnabled: true // Toggle for betting rounds
 };
 
 // Quiz Master endpoints
@@ -34,23 +35,45 @@ app.get('/api/master/state', (req, res) => {
 });
 
 app.post('/api/master/start-quiz', (req, res) => {
-  gameState.phase = 'betting';
   gameState.currentRound = 1;
   gameState.answers = {};
+  
+  // Check if betting is enabled for first round
+  if (gameState.bettingEnabled) {
+    gameState.phase = 'betting';
+  } else {
+    gameState.phase = 'answering';
+    gameState.answeringStartTime = Date.now();
+  }
+  
   res.json(gameState);
 });
 
 app.post('/api/master/next-round', (req, res) => {
   // Points already deducted in show-results, just move to next round
-  gameState.phase = 'betting';
   gameState.currentRound += 1;
   gameState.answers = {};
+  
+  // Check if betting is enabled for this round
+  if (gameState.bettingEnabled) {
+    gameState.phase = 'betting';
+  } else {
+    gameState.phase = 'answering';
+    gameState.answeringStartTime = Date.now();
+  }
+  
+  res.json(gameState);
+});
+
+app.post('/api/master/toggle-betting', (req, res) => {
+  const { enabled } = req.body;
+  gameState.bettingEnabled = enabled;
   res.json(gameState);
 });
 
 app.post('/api/master/advance-to-answering', (req, res) => {
   gameState.phase = 'answering';
-  gameState.answeringStartTime = Date.now(); // Record when answering phase starts
+  // No longer need server-side start time since client handles timing
   res.json(gameState);
 });
 
@@ -60,17 +83,29 @@ app.post('/api/master/mark-answer', (req, res) => {
   const bet = gameState.answers[playerId]?.bet !== undefined ? gameState.answers[playerId].bet : 0;
   
   let pointsChange = 0;
-  if (correct) {
-    if (bet === 0) {
-      pointsChange = 1; // Bonus point for correct answer with 0 bet
+  
+  // If betting was disabled for this round, use simple 1/0 scoring
+  if (!gameState.bettingEnabled || bet === undefined) {
+    if (correct) {
+      pointsChange = 1;
       player.points += 1;
     } else {
-      pointsChange = bet; // Win the amount you bet (not double)
-      player.points += bet;
+      pointsChange = 0;
     }
   } else {
-    pointsChange = -bet;
-    player.points -= bet;
+    // Normal betting scoring
+    if (correct) {
+      if (bet === 0) {
+        pointsChange = 1; // Bonus point for correct answer with 0 bet
+        player.points += 1;
+      } else {
+        pointsChange = bet; // Win the amount you bet (not double)
+        player.points += bet;
+      }
+    } else {
+      pointsChange = -bet;
+      player.points -= bet;
+    }
   }
   
   // Mark this answer as graded and store result
@@ -78,6 +113,37 @@ app.post('/api/master/mark-answer', (req, res) => {
     gameState.answers[playerId].graded = true;
     gameState.answers[playerId].correct = correct;
     gameState.answers[playerId].pointsChange = pointsChange;
+  }
+  
+  res.json(gameState);
+});
+
+app.post('/api/master/adjust-score', (req, res) => {
+  const { playerId, change } = req.body;
+  const player = gameState.players[playerId];
+  
+  if (player) {
+    player.points += change;
+  }
+  
+  res.json(gameState);
+});
+
+app.post('/api/master/undo-grading', (req, res) => {
+  const { playerId } = req.body;
+  const player = gameState.players[playerId];
+  const answer = gameState.answers[playerId];
+  
+  if (player && answer && answer.graded) {
+    // Reverse the point change
+    if (answer.pointsChange !== undefined) {
+      player.points -= answer.pointsChange;
+    }
+    
+    // Clear grading status
+    answer.graded = false;
+    delete answer.correct;
+    delete answer.pointsChange;
   }
   
   res.json(gameState);
@@ -138,6 +204,23 @@ app.post('/api/master/end-auction', (req, res) => {
   res.json(gameState);
 });
 
+app.post('/api/master/remove-player', (req, res) => {
+  const { playerId } = req.body;
+  
+  // Remove player from game state
+  delete gameState.players[playerId];
+  
+  // Remove ALL their data (answers, bets, etc.)
+  delete gameState.answers[playerId];
+  
+  // If they were the auction winner, clear that too
+  if (gameState.auctionWinner && gameState.auctionWinner.id === playerId) {
+    gameState.auctionWinner = null;
+  }
+  
+  res.json(gameState);
+});
+
 app.post('/api/master/end-game', (req, res) => {
   gameState.phase = 'leaderboard';
   res.json(gameState);
@@ -174,6 +257,7 @@ app.get('/api/player/state/:playerId', (req, res) => {
     phase: gameState.phase,
     currentRound: gameState.currentRound,
     player: player,
+    bettingEnabled: gameState.bettingEnabled,
     hasSubmittedBet: gameState.answers[playerId]?.bet !== undefined,
     hasSubmittedAnswer: !!gameState.answers[playerId]?.answer,
     isGraded: !!gameState.answers[playerId]?.graded,
@@ -196,17 +280,30 @@ app.post('/api/player/submit-bet', (req, res) => {
 });
 
 app.post('/api/player/submit-answer', (req, res) => {
-  const { playerId, answer } = req.body;
+  const { playerId, answer, timeTaken } = req.body;
   if (!gameState.answers[playerId]) {
     gameState.answers[playerId] = {};
   }
   gameState.answers[playerId].answer = answer;
   
-  // Calculate time taken (in seconds with 4 decimal places)
-  if (gameState.answeringStartTime) {
-    const timeTaken = (Date.now() - gameState.answeringStartTime) / 1000;
-    gameState.answers[playerId].timeTaken = timeTaken.toFixed(4);
+  // Use client-provided time (already formatted to 4 decimal places)
+  if (timeTaken) {
+    gameState.answers[playerId].timeTaken = timeTaken;
   }
+  
+  res.json({ success: true });
+});
+
+app.post('/api/player/log-focus-loss', (req, res) => {
+  const { playerId, focusLossCount, totalFocusLostTime, round } = req.body;
+  
+  // Store focus loss count and duration for this player in this round
+  if (!gameState.answers[playerId]) {
+    gameState.answers[playerId] = {};
+  }
+  
+  gameState.answers[playerId].focusLosses = focusLossCount;
+  gameState.answers[playerId].focusLostTime = totalFocusLostTime ? totalFocusLostTime.toFixed(2) : 0;
   
   res.json({ success: true });
 });
