@@ -15,6 +15,7 @@ function App() {
   const [totalFocusLostTime, setTotalFocusLostTime] = useState(0); // Track total time lost
   const [focusLostAt, setFocusLostAt] = useState(null); // Track when focus was lost
   const [gracePeriodActive, setGracePeriodActive] = useState(false); // 4-second grace period at start of answering
+  const [prediction, setPrediction] = useState(null); // For spotlight predictions
 
   const registerPlayer = async () => {
     if (!playerName.trim()) {
@@ -108,6 +109,9 @@ function App() {
   useEffect(() => {
     if (state?.phase === 'betting' || state?.phase === 'auction') {
       setBet(0);
+    }
+    if (state?.phase === 'spotlight') {
+      setPrediction(null); // Reset prediction when entering spotlight phase
     }
   }, [state?.phase, state?.currentRound]);
 
@@ -513,6 +517,80 @@ function App() {
   }
 
   if (state.phase === 'results') {
+    // Check if there's a spotlight result to show
+    if (state.spotlightResult) {
+      const spotlightResult = state.spotlightResult;
+      const wasSpotlightPlayer = spotlightResult.playerId === playerId;
+      
+      // Determine points earned
+      let pointsEarned = 0;
+      let outcomeMessage = '';
+      let emoji = '🔮';
+      
+      if (wasSpotlightPlayer) {
+        pointsEarned = spotlightResult.correct ? 10 : -2;
+        outcomeMessage = spotlightResult.correct ? 'You were correct!' : 'You were wrong!';
+        emoji = spotlightResult.correct ? '✅' : '❌';
+      } else {
+        // Check if they predicted correctly
+        const playerPrediction = spotlightResult.predictions?.[playerId];
+        if (playerPrediction) {
+          const predictedCorrectly = (playerPrediction === 'correct' && spotlightResult.correct) || 
+                                     (playerPrediction === 'wrong' && !spotlightResult.correct);
+          pointsEarned = predictedCorrectly ? 5 : 0;
+          outcomeMessage = predictedCorrectly ? 'Your prediction was correct!' : 'Your prediction was wrong!';
+          emoji = predictedCorrectly ? '✅' : '❌';
+        } else {
+          outcomeMessage = "You didn't predict";
+          emoji = '⭐';
+        }
+      }
+      
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
+          <div className="bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+            <div className="text-center">
+              <div className="text-8xl mb-6">{emoji}</div>
+              
+              <h2 className="text-3xl font-bold text-white mb-4">
+                Spotlight Results
+              </h2>
+              
+              <div className="mb-6 p-6 bg-gray-700 border border-gray-600 rounded-lg">
+                <div className="text-xl text-white mb-2">
+                  {spotlightResult.playerName} was <span className={spotlightResult.correct ? 'text-green-400' : 'text-red-400'}>
+                    {spotlightResult.correct ? 'CORRECT ✓' : 'WRONG ✗'}
+                  </span>
+                </div>
+                <div className="text-lg text-gray-400 mt-4">{outcomeMessage}</div>
+              </div>
+              
+              {pointsEarned !== 0 && (
+                <div className="mb-6 p-6 bg-gray-700 border border-gray-600 rounded-lg">
+                  <div className="text-sm text-gray-400 mb-2">Points Change</div>
+                  <div className={`text-5xl font-bold ${pointsEarned >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {pointsEarned >= 0 ? '+' : ''}{pointsEarned}
+                  </div>
+                </div>
+              )}
+              
+              <div className="p-6 bg-blue-900 border-2 border-blue-600 rounded-lg">
+                <div className="text-sm text-gray-400 mb-2">Your Total Points</div>
+                <div className="text-6xl font-bold text-blue-400">
+                  {state.player.points}
+                </div>
+              </div>
+              
+              <div className="mt-6 text-gray-500 text-sm">
+                Waiting for quiz master...
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    // Normal results display (no spotlight)
     const result = state.result || {};
     const isCorrect = result.correct;
     const pointsChange = result.pointsChange || 0;
@@ -545,6 +623,108 @@ function App() {
             
             <div className="mt-6 text-gray-500 text-sm">
               Waiting for quiz master to start next round...
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.phase === 'spotlight') {
+    // Player is in the spotlight
+    if (state.isSpotlightPlayer) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-yellow-900 via-yellow-800 to-orange-900 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border-4 border-yellow-500 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+            <div className="text-center">
+              <div className="text-8xl mb-6 animate-pulse">⭐</div>
+              <h1 className="text-4xl font-bold text-yellow-400 mb-4">You're in the Spotlight!</h1>
+              
+              <div className="bg-yellow-500/20 border-2 border-yellow-500 rounded-xl p-6 mb-6">
+                <p className="text-xl text-white mb-4">Special scoring for this question:</p>
+                <div className="space-y-2 text-lg">
+                  <div className="text-green-400 font-bold">✓ Correct: +10 points</div>
+                  <div className="text-red-400 font-bold">✗ Wrong: -2 points</div>
+                </div>
+              </div>
+              
+              <div className="p-6 bg-blue-900 border-2 border-blue-600 rounded-lg">
+                <div className="text-sm text-gray-400 mb-2">Your Current Points</div>
+                <div className="text-5xl font-bold text-blue-400">
+                  {state.player.points}
+                </div>
+              </div>
+              
+              <div className="mt-6 text-gray-400">
+                Waiting for quiz master to grade your answer...
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    // Other players predict the outcome
+    const submitPrediction = async (pred) => {
+      setPrediction(pred);
+      try {
+        await fetch(`${API_URL}/api/player/submit-prediction`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerId, prediction: pred })
+        });
+      } catch (err) {
+        console.error('Failed to submit prediction:', err);
+      }
+    };
+    
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-indigo-900 to-blue-900 flex items-center justify-center p-4">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+          <div className="text-center">
+            <div className="text-6xl mb-6">🔮</div>
+            <h2 className="text-3xl font-bold text-white mb-4">
+              {state.spotlightPlayerName} is in the Spotlight
+            </h2>
+            
+            <div className="bg-purple-900/50 border border-purple-600 rounded-lg p-6 mb-6">
+              <p className="text-xl text-white mb-2">Predict the outcome!</p>
+              <p className="text-green-400 font-bold text-lg">Correct prediction: +5 points</p>
+            </div>
+            
+            {!state.hasSubmittedPrediction && !prediction ? (
+              <div className="space-y-3">
+                <p className="text-gray-400 mb-4">Will they get it correct or wrong?</p>
+                <button
+                  onClick={() => submitPrediction('correct')}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white py-4 rounded-lg font-bold text-xl transition"
+                >
+                  ✓ They'll be Correct
+                </button>
+                <button
+                  onClick={() => submitPrediction('wrong')}
+                  className="w-full bg-red-600 hover:bg-red-700 text-white py-4 rounded-lg font-bold text-xl transition"
+                >
+                  ✗ They'll be Wrong
+                </button>
+              </div>
+            ) : (
+              <div className="p-6 bg-gray-700 border border-gray-600 rounded-lg">
+                <div className="text-green-400 font-bold text-lg mb-2">
+                  Prediction Submitted!
+                </div>
+                <div className="text-white text-xl">
+                  You predicted: {prediction || (state.hasSubmittedPrediction ? 'Submitted' : '')}
+                </div>
+                <div className="text-gray-400 mt-4">
+                  Waiting for quiz master...
+                </div>
+              </div>
+            )}
+            
+            <div className="mt-6 p-4 bg-blue-900 border border-blue-600 rounded-lg">
+              <div className="text-sm text-gray-400">Your Points</div>
+              <div className="text-3xl font-bold text-blue-400">{state.player.points}</div>
             </div>
           </div>
         </div>

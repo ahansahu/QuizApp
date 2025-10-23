@@ -138,6 +138,24 @@ function App() {
     fetchState();
   };
 
+  const startSpotlight = async (playerId) => {
+    await fetch(`${API_URL}/api/master/start-spotlight`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId })
+    });
+    fetchState();
+  };
+
+  const gradeSpotlight = async (correct) => {
+    await fetch(`${API_URL}/api/master/grade-spotlight`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ correct })
+    });
+    fetchState();
+  };
+
   if (!authenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center p-4">
@@ -301,8 +319,32 @@ function App() {
             </div>
           )}
 
-          {(state.phase === 'betting' || state.phase === 'answering' || state.phase === 'results' || state.phase === 'auction' || state.phase === 'auction-results') && (
+          {(state.phase === 'betting' || state.phase === 'answering' || state.phase === 'results' || state.phase === 'auction' || state.phase === 'auction-results' || state.phase === 'spotlight') && (
             <div className="mb-6 flex flex-wrap gap-3">
+              {state.phase === 'spotlight' && (
+                <div className="w-full">
+                  <div className="bg-yellow-900 border-2 border-yellow-600 rounded-xl p-6 mb-4">
+                    <h3 className="text-2xl font-bold text-yellow-300 mb-4 text-center">
+                      ⭐ {state.players[state.spotlightPlayerId]?.name} is in the Spotlight!
+                    </h3>
+                    <p className="text-gray-300 text-center mb-4">Grade their answer:</p>
+                    <div className="flex gap-4 justify-center">
+                      <button
+                        onClick={() => gradeSpotlight(true)}
+                        className="bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-lg font-bold text-xl transition"
+                      >
+                        ✓ Correct (+10 pts)
+                      </button>
+                      <button
+                        onClick={() => gradeSpotlight(false)}
+                        className="bg-red-600 hover:bg-red-700 text-white px-8 py-4 rounded-lg font-bold text-xl transition"
+                      >
+                        ✗ Wrong (-2 pts)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {state.phase === 'betting' && (
                 <button
                   onClick={advanceToAnswering}
@@ -458,13 +500,25 @@ function App() {
                             </button>
                           </div>
                         </div>
-                        <button
-                          onClick={() => removePlayer(id, player.name)}
-                          className="bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded flex items-center justify-center transition"
-                          title="Remove player"
-                        >
-                          <span className="text-white text-lg">✕</span>
-                        </button>
+                        <div className="flex flex-col gap-2">
+                          <button
+                            onClick={() => removePlayer(id, player.name)}
+                            className="bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded flex items-center justify-center transition"
+                            title="Remove player"
+                          >
+                            <span className="text-white text-lg">✕</span>
+                          </button>
+                          {/* Spotlight button - show during results and auction-results phases */}
+                          {(state.phase === 'results' || state.phase === 'auction-results') && (
+                            <button
+                              onClick={() => startSpotlight(id)}
+                              className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 w-8 h-8 rounded flex items-center justify-center transition font-bold"
+                              title="Put in spotlight"
+                            >
+                              ⭐
+                            </button>
+                          )}
+                        </div>
                       </div>
                       
                       {/* Always show bet and answer */}
@@ -488,6 +542,13 @@ function App() {
                             {state.answers[id].focusLostTime && ` (${state.answers[id].focusLostTime}s away)`}
                           </div>
                         )}
+                        
+                        {/* Show prediction during spotlight */}
+                        {state.phase === 'spotlight' && state.spotlightPlayerId !== id && state.spotlightPredictions && state.spotlightPredictions[id] && (
+                          <div className="text-purple-300 font-semibold">
+                            <span className="text-gray-500">Prediction:</span> {state.spotlightPredictions[id] === 'correct' ? '✓ Correct' : '✗ Wrong'}
+                          </div>
+                        )}
                       </div>
                       
                       {/* Grading buttons - only during answering phase */}
@@ -508,8 +569,8 @@ function App() {
                         </div>
                       )}
                       
-                      {/* Undo button - only when graded */}
-                      {state.answers[id]?.graded && (
+                      {/* Undo button - only during answering phase when graded */}
+                      {state.phase === 'answering' && state.answers[id]?.graded && (
                         <div className="mt-3">
                           <button
                             onClick={() => undoGrading(id)}

@@ -14,10 +14,12 @@ const QUIZ_MASTER_PASSWORD = 'quiz';
 const gameState = {
   players: {},
   currentRound: 0,
-  phase: 'registration', // registration, betting, answering, results, auction, auction-results, leaderboard
+  phase: 'registration', // registration, betting, answering, results, auction, auction-results, leaderboard, spotlight
   answers: {},
   auctionWinner: null,
-  bettingEnabled: true // Toggle for betting rounds
+  bettingEnabled: true, // Toggle for betting rounds
+  spotlightPlayerId: null, // ID of player in spotlight
+  spotlightPredictions: {} // playerId: 'correct' or 'wrong'
 };
 
 // Quiz Master endpoints
@@ -53,6 +55,7 @@ app.post('/api/master/next-round', (req, res) => {
   // Points already deducted in show-results, just move to next round
   gameState.currentRound += 1;
   gameState.answers = {};
+  gameState.spotlightResult = null; // Clear spotlight result
   
   // Check if betting is enabled for this round
   if (gameState.bettingEnabled) {
@@ -149,6 +152,53 @@ app.post('/api/master/undo-grading', (req, res) => {
   res.json(gameState);
 });
 
+app.post('/api/master/start-spotlight', (req, res) => {
+  const { playerId } = req.body;
+  gameState.phase = 'spotlight';
+  gameState.spotlightPlayerId = playerId;
+  gameState.spotlightPredictions = {};
+  res.json(gameState);
+});
+
+app.post('/api/master/grade-spotlight', (req, res) => {
+  const { correct } = req.body;
+  const spotlightId = gameState.spotlightPlayerId;
+  
+  if (spotlightId && gameState.players[spotlightId]) {
+    // Award/deduct points for spotlight player
+    if (correct) {
+      gameState.players[spotlightId].points += 10;
+    } else {
+      gameState.players[spotlightId].points -= 2;
+    }
+    
+    // Award points to players who predicted correctly
+    Object.entries(gameState.spotlightPredictions).forEach(([playerId, prediction]) => {
+      if (playerId !== spotlightId) {
+        const predictedCorrectly = (prediction === 'correct' && correct) || (prediction === 'wrong' && !correct);
+        if (predictedCorrectly) {
+          gameState.players[playerId].points += 5;
+        }
+      }
+    });
+    
+    // Store result for display - each player will see their own outcome
+    gameState.spotlightResult = {
+      playerId: spotlightId,
+      playerName: gameState.players[spotlightId].name,
+      correct: correct,
+      predictions: {...gameState.spotlightPredictions}
+    };
+  }
+  
+  // Go back to results phase, clear spotlight state
+  gameState.phase = 'results';
+  gameState.spotlightPlayerId = null;
+  gameState.spotlightPredictions = {};
+  
+  res.json(gameState);
+});
+
 app.post('/api/master/show-results', (req, res) => {
   // Auto-judge players who didn't submit answers as wrong BEFORE showing results
   Object.keys(gameState.players).forEach(playerId => {
@@ -178,15 +228,29 @@ app.post('/api/master/start-auction', (req, res) => {
 });
 
 app.post('/api/master/end-auction', (req, res) => {
-  // Find the highest bidder
+  // Find the highest bidder with risk-based tie-breaking
   let highestBid = -1;
   let winnerId = null;
+  let winnerPoints = Infinity; // Track winner's total points for tie-breaking
   
   Object.keys(gameState.answers).forEach(playerId => {
     const bid = gameState.answers[playerId]?.bet || 0;
+    const playerPoints = gameState.players[playerId].points;
+    
+    // Determine if this player should become the new winner
     if (bid > highestBid) {
+      // Higher bid always wins
       highestBid = bid;
       winnerId = playerId;
+      winnerPoints = playerPoints;
+    } else if (bid === highestBid && bid > 0) {
+      // Same bid - use risk-based tie-break
+      // Player with fewer points is taking more risk, so they win
+      if (playerPoints < winnerPoints) {
+        winnerId = playerId;
+        winnerPoints = playerPoints;
+      }
+      // If playerPoints === winnerPoints, first bidder keeps the win (current behavior)
     }
   });
   
@@ -262,6 +326,10 @@ app.get('/api/player/state/:playerId', (req, res) => {
     hasSubmittedAnswer: !!gameState.answers[playerId]?.answer,
     isGraded: !!gameState.answers[playerId]?.graded,
     auctionWinner: gameState.auctionWinner,
+    isSpotlightPlayer: gameState.spotlightPlayerId === playerId,
+    spotlightPlayerName: gameState.spotlightPlayerId ? gameState.players[gameState.spotlightPlayerId]?.name : null,
+    hasSubmittedPrediction: !!gameState.spotlightPredictions[playerId],
+    spotlightResult: gameState.spotlightResult,
     result: gameState.answers[playerId] ? {
       correct: gameState.answers[playerId].correct,
       bet: gameState.answers[playerId].bet,
@@ -304,6 +372,17 @@ app.post('/api/player/log-focus-loss', (req, res) => {
   
   gameState.answers[playerId].focusLosses = focusLossCount;
   gameState.answers[playerId].focusLostTime = totalFocusLostTime ? totalFocusLostTime.toFixed(2) : 0;
+  
+  res.json({ success: true });
+});
+
+app.post('/api/player/submit-prediction', (req, res) => {
+  const { playerId, prediction } = req.body;
+  
+  // Only allow predictions during spotlight phase
+  if (gameState.phase === 'spotlight') {
+    gameState.spotlightPredictions[playerId] = prediction; // 'correct' or 'wrong'
+  }
   
   res.json({ success: true });
 });
