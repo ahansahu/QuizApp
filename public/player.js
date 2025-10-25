@@ -14,7 +14,6 @@ function App() {
   const [focusLossCount, setFocusLossCount] = useState(0);
   const [totalFocusLostTime, setTotalFocusLostTime] = useState(0); // Track total time lost
   const [focusLostAt, setFocusLostAt] = useState(null); // Track when focus was lost
-  const [gracePeriodActive, setGracePeriodActive] = useState(false); // 4-second grace period at start of answering
   const [prediction, setPrediction] = useState(null); // For spotlight predictions
 
   const registerPlayer = async () => {
@@ -68,8 +67,8 @@ function App() {
 
   useEffect(() => {
     const handleBlur = () => {
-      // Only track if we're in answering phase AND haven't submitted yet AND grace period is over
-      if (state?.phase === 'answering' && !state?.hasSubmittedAnswer && !gracePeriodActive) {
+      // Track in answering or poker-answering phase AND haven't submitted yet
+      if ((state?.phase === 'answering' || state?.phase === 'poker-answering') && !state?.hasSubmittedAnswer) {
         setFocusLossCount(prev => prev + 1);
         setFocusLostAt(Date.now()); // Record when focus was lost
       }
@@ -77,7 +76,7 @@ function App() {
 
     const handleFocus = () => {
       // Calculate how long focus was lost
-      if (focusLostAt && state?.phase === 'answering' && !state?.hasSubmittedAnswer) {
+      if (focusLostAt && (state?.phase === 'answering' || state?.phase === 'poker-answering') && !state?.hasSubmittedAnswer) {
         const timeLost = (Date.now() - focusLostAt) / 1000; // in seconds
         setTotalFocusLostTime(prev => prev + timeLost);
         
@@ -104,7 +103,7 @@ function App() {
       window.removeEventListener('blur', handleBlur);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [state?.phase, state?.hasSubmittedAnswer, state?.currentRound, playerId, focusLossCount, focusLostAt, totalFocusLostTime, gracePeriodActive]);
+  }, [state?.phase, state?.hasSubmittedAnswer, state?.currentRound, playerId, focusLossCount, focusLostAt, totalFocusLostTime]);
 
   useEffect(() => {
     if (state?.phase === 'betting' || state?.phase === 'auction') {
@@ -113,10 +112,14 @@ function App() {
     if (state?.phase === 'spotlight') {
       setPrediction(null); // Reset prediction when entering spotlight phase
     }
+    if (state?.phase === 'poker' || state?.phase === 'poker-answering') {
+      setAnswer(''); // Reset answer when entering poker phase
+      setIsSubmitting(false);
+    }
   }, [state?.phase, state?.currentRound]);
 
   useEffect(() => {
-    if (state?.phase === 'answering') {
+    if (state?.phase === 'answering' || state?.phase === 'poker-answering') {
       setAnswer('');
       setIsSubmitting(false);
       setFocusLossCount(0);
@@ -126,25 +129,8 @@ function App() {
       if (!answeringStartTime) {
         setAnsweringStartTime(Date.now());
       }
-
-      // Start 4-second grace period
-      setGracePeriodActive(true);
-      
-      // After grace period, check if player is already away
-      const gracePeriodTimer = setTimeout(() => {
-        setGracePeriodActive(false);
-        
-        // Check if document is currently not focused
-        if (!document.hasFocus()) {
-          setFocusLossCount(1);
-          setFocusLostAt(Date.now());
-        }
-      }, 4000); // 4 second grace period
-      
-      return () => clearTimeout(gracePeriodTimer);
     } else {
       setAnsweringStartTime(null);
-      setGracePeriodActive(false);
     }
   }, [state?.phase, state?.currentRound]);
 
@@ -378,7 +364,7 @@ function App() {
             />
           )}
           
-          {!submittedAnswer && (
+          {!submittedAnswer && !state.answeringLocked && (
             <button
               onClick={submitAnswer}
               disabled={!answer.trim() || isSubmitting || submittedAnswer}
@@ -386,6 +372,14 @@ function App() {
             >
               {isSubmitting ? 'Submitting...' : 'Submit Answer'}
             </button>
+          )}
+          
+          {!submittedAnswer && state.answeringLocked && (
+            <div className="mt-4 p-4 bg-red-900 border border-red-600 rounded-lg text-center">
+              <div className="text-red-400 font-semibold">
+                ⏱️ Time's up! Answering period has ended.
+              </div>
+            </div>
           )}
           
           {submittedAnswer && (
@@ -517,6 +511,58 @@ function App() {
   }
 
   if (state.phase === 'results') {
+    // Check if there's a poker result to show
+    if (state.pokerResult) {
+      const result = state.result || {};
+      const isCorrect = result.correct;
+      const pokerWinnings = result.pokerWinnings || 0;
+      const pokerLoss = result.pokerLoss || 0;
+      
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
+          <div className="bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+            <div className="text-center">
+              <div className="text-8xl mb-6">
+                {isCorrect ? '🎉' : '💔'}
+              </div>
+              
+              <h2 className="text-3xl font-bold mb-4 text-white">
+                {isCorrect ? 'Winner!' : 'Not this time!'}
+              </h2>
+              
+              {pokerWinnings > 0 && (
+                <div className="mb-6 p-6 bg-yellow-900 border-2 border-yellow-600 rounded-lg">
+                  <div className="text-sm text-gray-400 mb-2">You Won From The Pot</div>
+                  <div className="text-6xl font-bold text-yellow-400">
+                    +{pokerWinnings}
+                  </div>
+                </div>
+              )}
+              
+              {!isCorrect && pokerLoss > 0 && (
+                <div className="mb-6 p-6 bg-gray-700 border border-gray-600 rounded-lg">
+                  <div className="text-xl text-gray-400">
+                    You lost your bet of {pokerLoss} pts
+                  </div>
+                </div>
+              )}
+              
+              <div className="p-6 bg-blue-900 border-2 border-blue-600 rounded-lg">
+                <div className="text-sm text-gray-400 mb-2">Your Total Points</div>
+                <div className="text-6xl font-bold text-blue-400">
+                  {state.player.points}
+                </div>
+              </div>
+              
+              <div className="mt-6 text-gray-500 text-sm">
+                Waiting for quiz master...
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
     // Check if there's a spotlight result to show
     if (state.spotlightResult) {
       const spotlightResult = state.spotlightResult;
@@ -727,6 +773,97 @@ function App() {
               <div className="text-3xl font-bold text-blue-400">{state.player.points}</div>
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.phase === 'poker') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-orange-900 flex items-center justify-center p-4">
+        <div className="bg-gray-900 border-4 border-red-500 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+          <div className="text-center">
+            <div className="text-8xl mb-6 animate-pulse">♠️</div>
+            <h1 className="text-4xl font-bold text-red-400 mb-4">Poker Round!</h1>
+            
+            <div className="bg-red-500/20 border-2 border-red-500 rounded-xl p-6 mb-6">
+              <p className="text-xl text-white mb-4">You've been forced to bet:</p>
+              <div className="text-6xl font-bold text-red-400 mb-4">{state.pokerBet} pts</div>
+              <p className="text-gray-300">Winner(s) take all!</p>
+            </div>
+            
+            <div className="p-6 bg-blue-900 border-2 border-blue-600 rounded-lg mb-4">
+              <div className="text-sm text-gray-400 mb-2">Your Remaining Points</div>
+              <div className="text-5xl font-bold text-blue-400">
+                {state.player.points}
+              </div>
+            </div>
+            
+            <div className="p-6 bg-gray-700 border-2 border-gray-600 rounded-lg">
+              <div className="text-sm text-gray-400 mb-2">Total Pot</div>
+              <div className="text-4xl font-bold text-yellow-400">
+                {state.pokerPot} pts
+              </div>
+            </div>
+            
+            <div className="mt-6 text-gray-400">
+              Waiting for quiz master to start question...
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.phase === 'poker-answering') {
+    const submittedAnswer = state.hasSubmittedAnswer;
+    
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-gray-900 flex items-center justify-center p-4">
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl p-8 max-w-md w-full">
+          <div className="text-center mb-6">
+            <div className="text-5xl mb-4">♠️</div>
+            <h2 className="text-2xl font-bold mb-2 text-white">{state.player.name}</h2>
+            <div className="text-4xl font-bold text-blue-400">{state.player.points} points</div>
+            <div className="text-sm text-gray-400 mt-2">Round {state.currentRound}</div>
+            <div className="text-yellow-400 font-bold mt-2">Pot: {state.pokerPot} pts</div>
+          </div>
+          
+          <h3 className="text-xl font-semibold mb-4 text-center text-white">📝 Answer the Question</h3>
+          
+          <textarea
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            placeholder="Type your answer here..."
+            className="w-full px-4 py-3 bg-gray-700 border border-gray-600 text-white placeholder-gray-500 rounded-lg mb-4 text-lg min-h-32 resize-none"
+            disabled={submittedAnswer}
+          />
+          
+          {!submittedAnswer && !state.answeringLocked && (
+            <button
+              onClick={submitAnswer}
+              disabled={!answer.trim() || isSubmitting || submittedAnswer}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-4 rounded-lg font-semibold text-lg transition"
+            >
+              {isSubmitting ? 'Submitting...' : 'Submit Answer'}
+            </button>
+          )}
+          
+          {!submittedAnswer && state.answeringLocked && (
+            <div className="mt-4 p-4 bg-red-900 border border-red-600 rounded-lg text-center">
+              <div className="text-red-400 font-semibold">
+                ⏱️ Time's up! Answering period has ended.
+              </div>
+            </div>
+          )}
+          
+          {submittedAnswer && (
+            <div className="mt-4 p-4 bg-gray-700 border border-gray-600 rounded-lg text-center">
+              <div className="text-blue-400 font-semibold">
+                Answer submitted! Waiting for quiz master...
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );

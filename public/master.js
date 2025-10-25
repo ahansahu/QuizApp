@@ -156,6 +156,26 @@ function App() {
     fetchState();
   };
 
+  const startPoker = async () => {
+    await fetch(`${API_URL}/api/master/start-poker`, { method: 'POST' });
+    fetchState();
+  };
+
+  const pokerToAnswering = async () => {
+    await fetch(`${API_URL}/api/master/poker-to-answering`, { method: 'POST' });
+    fetchState();
+  };
+
+  const showPokerResults = async () => {
+    await fetch(`${API_URL}/api/master/show-poker-results`, { method: 'POST' });
+    fetchState();
+  };
+
+  const lockAnswering = async () => {
+    await fetch(`${API_URL}/api/master/lock-answering`, { method: 'POST' });
+    fetchState();
+  };
+
   if (!authenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center p-4">
@@ -319,8 +339,34 @@ function App() {
             </div>
           )}
 
-          {(state.phase === 'betting' || state.phase === 'answering' || state.phase === 'results' || state.phase === 'auction' || state.phase === 'auction-results' || state.phase === 'spotlight') && (
+          {(state.phase === 'betting' || state.phase === 'answering' || state.phase === 'results' || state.phase === 'auction' || state.phase === 'auction-results' || state.phase === 'spotlight' || state.phase === 'poker' || state.phase === 'poker-answering') && (
             <div className="mb-6 flex flex-wrap gap-3">
+              {state.phase === 'poker' && (
+                <div className="w-full">
+                  <div className="bg-red-900 border-2 border-red-600 rounded-xl p-6 mb-4">
+                    <h3 className="text-2xl font-bold text-red-300 mb-4 text-center">
+                      ♠️ Poker Round - Pot: {state.pokerPot} pts
+                    </h3>
+                    <p className="text-gray-300 text-center mb-4">All players have been forced to bet 10% of their points!</p>
+                    <button
+                      onClick={pokerToAnswering}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-semibold transition w-full"
+                    >
+                      ⏭️ Skip to Answering
+                    </button>
+                  </div>
+                </div>
+              )}
+              {state.phase === 'poker-answering' && (
+                <div className="w-full">
+                  <div className="bg-red-900 border-2 border-red-600 rounded-xl p-6 mb-4">
+                    <h3 className="text-2xl font-bold text-red-300 mb-4 text-center">
+                      ♠️ Poker Round - Pot: {state.pokerPot} pts
+                    </h3>
+                    <p className="text-gray-300 text-center">Winners will split the pot!</p>
+                  </div>
+                </div>
+              )}
               {state.phase === 'spotlight' && (
                 <div className="w-full">
                   <div className="bg-yellow-900 border-2 border-yellow-600 rounded-xl p-6 mb-4">
@@ -354,12 +400,40 @@ function App() {
                 </button>
               )}
               {state.phase === 'answering' && (
-                <button
-                  onClick={showResults}
-                  className="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-semibold transition"
-                >
-                  📊 Show Results
-                </button>
+                <>
+                  {!state.answeringLocked && (
+                    <button
+                      onClick={lockAnswering}
+                      className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-lg font-semibold transition"
+                    >
+                      🛑 Stop Answering
+                    </button>
+                  )}
+                  <button
+                    onClick={showResults}
+                    className="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-semibold transition"
+                  >
+                    📊 Show Results
+                  </button>
+                </>
+              )}
+              {state.phase === 'poker-answering' && (
+                <>
+                  {!state.answeringLocked && (
+                    <button
+                      onClick={lockAnswering}
+                      className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-lg font-semibold transition"
+                    >
+                      🛑 Stop Answering
+                    </button>
+                  )}
+                  <button
+                    onClick={showPokerResults}
+                    className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-semibold transition"
+                  >
+                    📊 Show Poker Results
+                  </button>
+                </>
               )}
               {state.phase === 'results' && (
                 <>
@@ -374,6 +448,12 @@ function App() {
                     className="bg-yellow-500 hover:bg-yellow-600 text-white px-6 py-3 rounded-lg font-semibold transition"
                   >
                     🔨 Start Auction
+                  </button>
+                  <button
+                    onClick={startPoker}
+                    className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-semibold transition"
+                  >
+                    ♠️ Poker Round
                   </button>
                   <button
                     onClick={endGame}
@@ -422,6 +502,12 @@ function App() {
                     className="bg-yellow-500 hover:bg-yellow-600 text-white px-6 py-3 rounded-lg font-semibold transition"
                   >
                     🔨 Start Another Auction
+                  </button>
+                  <button
+                    onClick={startPoker}
+                    className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-semibold transition"
+                  >
+                    ♠️ Poker Round
                   </button>
                   <button
                     onClick={endGame}
@@ -523,6 +609,12 @@ function App() {
                       
                       {/* Always show bet and answer */}
                       <div className="space-y-1 text-sm">
+                        {/* Show poker bet during poker phases */}
+                        {(state.phase === 'poker' || state.phase === 'poker-answering' || state.phase === 'poker-results') && state.pokerBets && state.pokerBets[id] !== undefined && (
+                          <div className="text-red-400 font-bold">
+                            <span className="text-gray-500">Poker Bet:</span> {state.pokerBets[id]} pts (forced)
+                          </div>
+                        )}
                         <div className="text-gray-300">
                           <span className="text-gray-500">Bet:</span> {state.answers[id]?.bet !== undefined ? `${state.answers[id].bet} pts` : 'Not submitted'}
                         </div>
@@ -531,12 +623,12 @@ function App() {
                         </div>
                         
                         {/* Show time and focus info only during/after answering */}
-                        {(state.phase === 'answering' || state.phase === 'results') && state.answers[id]?.timeTaken && (
+                        {(state.phase === 'answering' || state.phase === 'results' || state.phase === 'poker-answering') && state.answers[id]?.timeTaken && (
                           <div className="text-blue-300">
                             <span className="text-gray-500">⏱️ Time:</span> {state.answers[id].timeTaken}s
                           </div>
                         )}
-                        {(state.phase === 'answering' || state.phase === 'results') && state.answers[id]?.focusLosses > 0 && (
+                        {(state.phase === 'answering' || state.phase === 'results' || state.phase === 'poker-answering') && state.answers[id]?.focusLosses > 0 && (
                           <div className="text-yellow-300">
                             <span className="text-gray-500">⚠️ Focus lost:</span> {state.answers[id].focusLosses} time{state.answers[id].focusLosses > 1 ? 's' : ''}
                             {state.answers[id].focusLostTime && ` (${state.answers[id].focusLostTime}s away)`}
@@ -551,8 +643,8 @@ function App() {
                         )}
                       </div>
                       
-                      {/* Grading buttons - only during answering phase */}
-                      {state.phase === 'answering' && state.answers[id]?.answer && !state.answers[id]?.graded && (
+                      {/* Grading buttons - during answering or poker-answering phase */}
+                      {(state.phase === 'answering' || state.phase === 'poker-answering') && state.answers[id]?.answer && !state.answers[id]?.graded && (
                         <div className="flex gap-2 mt-3">
                           <button
                             onClick={() => markAnswer(id, true)}
@@ -569,8 +661,8 @@ function App() {
                         </div>
                       )}
                       
-                      {/* Undo button - only during answering phase when graded */}
-                      {state.phase === 'answering' && state.answers[id]?.graded && (
+                      {/* Undo button - only during answering or poker-answering phase when graded */}
+                      {(state.phase === 'answering' || state.phase === 'poker-answering') && state.answers[id]?.graded && (
                         <div className="mt-3">
                           <button
                             onClick={() => undoGrading(id)}

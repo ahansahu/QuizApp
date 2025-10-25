@@ -5,6 +5,7 @@ const API_URL = window.location.origin;
 function App() {
   const [data, setData] = useState(null);
   const [prevScores, setPrevScores] = useState({});
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const fetchLeaderboard = async () => {
     try {
@@ -28,15 +29,35 @@ function App() {
     }
   };
 
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen();
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
+    }
+  };
+
   useEffect(() => {
     fetchLeaderboard();
     const interval = setInterval(fetchLeaderboard, 1000); // Update every second
-    return () => clearInterval(interval);
+    
+    // Listen for fullscreen changes
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
   }, []);
 
   if (!data) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center">
         <div className="text-white text-3xl font-bold">Loading...</div>
       </div>
     );
@@ -44,31 +65,36 @@ function App() {
 
   if (data.players.length === 0) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex items-center justify-center p-4">
-        <div className="bg-white rounded-3xl shadow-2xl p-12 max-w-2xl w-full text-center">
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
+        <div className="bg-gray-800 border border-gray-700 rounded-3xl shadow-2xl p-12 max-w-2xl w-full text-center">
           <div className="text-8xl mb-6">🏆</div>
-          <h1 className="text-5xl font-bold text-gray-800 mb-4">Live Leaderboard</h1>
-          <p className="text-xl text-gray-600">Waiting for players to join...</p>
+          <h1 className="text-5xl font-bold text-white mb-4">Leaderboard</h1>
+          <p className="text-xl text-gray-400">Waiting for players to join...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 p-4 md:p-8">
-      <div className="max-w-5xl mx-auto">
-        <div className="bg-white/95 backdrop-blur rounded-3xl shadow-2xl p-6 md:p-10">
-          <div className="text-center mb-8">
-            <div className="text-7xl mb-4">🏆</div>
-            <h1 className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-yellow-500 via-purple-500 to-pink-500 bg-clip-text text-transparent mb-3">
-              Live Leaderboard
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 p-4 md:p-8 relative">
+      {/* Fullscreen Toggle Button */}
+      <button
+        onClick={toggleFullscreen}
+        className="fixed top-4 right-4 z-50 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-semibold transition shadow-lg"
+      >
+        {isFullscreen ? '⤓ Exit Fullscreen' : '⤢ Fullscreen'}
+      </button>
+
+      <div className={`${isFullscreen ? 'h-screen flex flex-col' : 'max-w-5xl mx-auto'}`}>
+        <div className={`bg-gray-800/95 backdrop-blur border border-gray-700 rounded-3xl shadow-2xl ${isFullscreen ? 'flex-1 flex flex-col' : 'p-6 md:p-10'} ${isFullscreen ? 'p-4 md:p-6' : ''}`}>
+          <div className="text-center mb-6">
+            <div className="text-6xl mb-3">🏆</div>
+            <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-yellow-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">
+              Leaderboard
             </h1>
-            {data.phase !== 'registration' && (
-              <p className="text-xl text-gray-600">Round {data.currentRound}</p>
-            )}
           </div>
 
-          <div className="space-y-3">
+          <div className={`space-y-2 ${isFullscreen ? 'flex-1 overflow-y-auto' : ''}`}>
             {data.players.map((player, index) => {
               const rank = index + 1;
               const scoreChanged = prevScores[player.id] !== undefined && prevScores[player.id] !== player.points;
@@ -85,21 +111,21 @@ function App() {
                 medal = '🥇';
                 bgGradient = 'bg-gradient-to-r from-yellow-600 via-yellow-500 to-yellow-600';
                 borderColor = 'border-yellow-400';
-                rankSize = 'text-3xl';
+                rankSize = 'text-2xl md:text-3xl';
                 nameSize = 'text-lg md:text-xl';
                 pointsSize = 'text-3xl md:text-4xl';
               } else if (rank === 2) {
                 medal = '🥈';
                 bgGradient = 'bg-gradient-to-r from-gray-600 to-gray-500';
                 borderColor = 'border-gray-500';
-                rankSize = 'text-2xl';
+                rankSize = 'text-xl md:text-2xl';
                 nameSize = 'text-base md:text-lg';
                 pointsSize = 'text-2xl md:text-3xl';
               } else if (rank === 3) {
                 medal = '🥉';
                 bgGradient = 'bg-gradient-to-r from-orange-900 to-orange-800';
                 borderColor = 'border-orange-600';
-                rankSize = 'text-2xl';
+                rankSize = 'text-xl md:text-2xl';
                 nameSize = 'text-base md:text-lg';
                 pointsSize = 'text-2xl md:text-3xl';
               }
@@ -107,7 +133,7 @@ function App() {
               return (
                 <div
                   key={player.id}
-                  className={`${bgGradient} border-2 ${borderColor} rounded-xl p-3 md:p-4 transition-all duration-500 transform ${
+                  className={`${bgGradient} border-2 ${borderColor} rounded-xl ${isFullscreen ? 'p-2 md:p-3' : 'p-3 md:p-4'} transition-all duration-500 transform ${
                     scoreChanged ? 'scale-105 shadow-2xl' : 'hover:scale-102'
                   } ${rank === 1 ? 'shadow-xl' : 'shadow-lg'}`}
                 >
@@ -139,13 +165,6 @@ function App() {
                 </div>
               );
             })}
-          </div>
-
-          <div className="mt-6 text-center">
-            <div className="inline-flex items-center gap-2 px-4 py-2 bg-green-900 border border-green-700 rounded-full">
-              <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
-              <span className="text-sm font-semibold text-green-300">Live Updates</span>
-            </div>
           </div>
         </div>
       </div>

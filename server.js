@@ -8,18 +8,21 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // IMPORTANT: Change this password before deploying!
-const QUIZ_MASTER_PASSWORD = 'quiz';
+const QUIZ_MASTER_PASSWORD = 'thequizzler';
 
 // In-memory game state
 const gameState = {
   players: {},
   currentRound: 0,
-  phase: 'registration', // registration, betting, answering, results, auction, auction-results, leaderboard, spotlight
+  phase: 'registration', // registration, betting, answering, results, auction, auction-results, leaderboard, spotlight, poker, poker-answering, poker-results
   answers: {},
   auctionWinner: null,
   bettingEnabled: true, // Toggle for betting rounds
   spotlightPlayerId: null, // ID of player in spotlight
-  spotlightPredictions: {} // playerId: 'correct' or 'wrong'
+  spotlightPredictions: {}, // playerId: 'correct' or 'wrong'
+  pokerPot: 0, // Total points in the poker pot
+  pokerBets: {}, // playerId: betAmount
+  answeringLocked: false // Whether players can submit answers
 };
 
 // Quiz Master endpoints
@@ -56,6 +59,10 @@ app.post('/api/master/next-round', (req, res) => {
   gameState.currentRound += 1;
   gameState.answers = {};
   gameState.spotlightResult = null; // Clear spotlight result
+  gameState.pokerPot = 0; // Clear poker pot
+  gameState.pokerBets = {}; // Clear poker bets
+  gameState.pokerResult = null; // Clear poker result
+  gameState.answeringLocked = false; // Reset answering lock
   
   // Check if betting is enabled for this round
   if (gameState.bettingEnabled) {
@@ -74,8 +81,14 @@ app.post('/api/master/toggle-betting', (req, res) => {
   res.json(gameState);
 });
 
+app.post('/api/master/lock-answering', (req, res) => {
+  gameState.answeringLocked = true;
+  res.json(gameState);
+});
+
 app.post('/api/master/advance-to-answering', (req, res) => {
   gameState.phase = 'answering';
+  gameState.answeringLocked = false; // Unlock when starting answering
   // No longer need server-side start time since client handles timing
   res.json(gameState);
 });
@@ -87,11 +100,16 @@ app.post('/api/master/mark-answer', (req, res) => {
   
   let pointsChange = 0;
   
+  // If in poker-answering phase, don't give any flat points - only pot split
+  if (gameState.phase === 'poker-answering') {
+    // Just mark as correct/wrong, points will be distributed when showing results
+    pointsChange = 0;
+  }
   // If betting was disabled for this round, use simple 1/0 scoring
-  if (!gameState.bettingEnabled || bet === undefined) {
+  else if (!gameState.bettingEnabled || bet === undefined) {
     if (correct) {
-      pointsChange = 1;
-      player.points += 1;
+      pointsChange = 2; // 2 points for correct answer when betting is off
+      player.points += 2;
     } else {
       pointsChange = 0;
     }
@@ -157,6 +175,7 @@ app.post('/api/master/start-spotlight', (req, res) => {
   gameState.phase = 'spotlight';
   gameState.spotlightPlayerId = playerId;
   gameState.spotlightPredictions = {};
+  gameState.pokerResult = null; // Clear poker result
   res.json(gameState);
 });
 
@@ -199,6 +218,93 @@ app.post('/api/master/grade-spotlight', (req, res) => {
   res.json(gameState);
 });
 
+app.post('/api/master/start-poker', (req, res) => {
+  gameState.phase = 'poker';
+  gameState.pokerBets = {};
+  gameState.pokerPot = 0;
+  gameState.answers = {};
+  gameState.pokerResult = null; // Clear previous poker result
+  gameState.spotlightResult = null; // Clear spotlight result
+  
+  // Calculate and deduct 10% from each player
+  Object.keys(gameState.players).forEach(playerId => {
+    const player = gameState.players[playerId];
+    let bet;
+    
+    if (player.points < 10) {
+      // Go all in if less than 10 points
+      bet = player.points;
+    } else {
+      // 10% of points, rounded to nearest integer
+      bet = Math.round(player.points * 0.1);
+    }
+    
+    // Deduct bet from player
+    player.points -= bet;
+    gameState.pokerBets[playerId] = bet;
+    gameState.pokerPot += bet;
+  });
+  
+  res.json(gameState);
+});
+
+app.post('/api/master/poker-to-answering', (req, res) => {
+  gameState.phase = 'poker-answering';
+  gameState.answeringLocked = false; // Unlock when starting poker answering
+  res.json(gameState);
+});
+
+app.post('/api/master/show-poker-results', (req, res) => {
+  // Auto-judge players who didn't submit answers as wrong
+  Object.keys(gameState.players).forEach(playerId => {
+    const playerAnswer = gameState.answers[playerId];
+    if (!playerAnswer || !playerAnswer.answer) {
+      if (!gameState.answers[playerId]) {
+        gameState.answers[playerId] = {};
+      }
+      gameState.answers[playerId].graded = true;
+      gameState.answers[playerId].correct = false;
+      gameState.answers[playerId].answer = '(no answer submitted)';
+    }
+  });
+  
+  // Find all winners (players who answered correctly)
+  const winners = [];
+  Object.keys(gameState.answers).forEach(playerId => {
+    if (gameState.answers[playerId].correct) {
+      winners.push(playerId);
+    }
+  });
+  
+  // Distribute pot among winners
+  if (winners.length > 0) {
+    const winningsPerPlayer = Math.floor(gameState.pokerPot / winners.length);
+    winners.forEach(playerId => {
+      gameState.players[playerId].points += winningsPerPlayer;
+      gameState.answers[playerId].pointsChange = winningsPerPlayer;
+      gameState.answers[playerId].pokerWinnings = winningsPerPlayer;
+    });
+  }
+  
+  // Mark losers with their poker bet loss
+  Object.keys(gameState.answers).forEach(playerId => {
+    if (!gameState.answers[playerId].correct) {
+      gameState.answers[playerId].pointsChange = 0;
+      gameState.answers[playerId].pokerLoss = gameState.pokerBets[playerId] || 0;
+    }
+  });
+  
+  // Store poker result data and move to results phase
+  gameState.pokerResult = {
+    pot: gameState.pokerPot,
+    winners: winners.length,
+    bets: {...gameState.pokerBets}
+  };
+  
+  gameState.phase = 'results';
+  res.json(gameState);
+});
+
 app.post('/api/master/show-results', (req, res) => {
   // Auto-judge players who didn't submit answers as wrong BEFORE showing results
   Object.keys(gameState.players).forEach(playerId => {
@@ -224,6 +330,8 @@ app.post('/api/master/start-auction', (req, res) => {
   gameState.phase = 'auction';
   gameState.answers = {};
   gameState.auctionWinner = null;
+  gameState.pokerResult = null; // Clear poker result
+  gameState.spotlightResult = null; // Clear spotlight result
   res.json(gameState);
 });
 
@@ -304,7 +412,7 @@ app.post('/api/player/register', (req, res) => {
   const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
   gameState.players[id] = {
     name,
-    points: 5  // START WITH 5 POINTS
+    points: 0  // START WITH 0 POINTS
   };
   res.json({ playerId: id, player: gameState.players[id] });
 });
@@ -322,6 +430,7 @@ app.get('/api/player/state/:playerId', (req, res) => {
     currentRound: gameState.currentRound,
     player: player,
     bettingEnabled: gameState.bettingEnabled,
+    answeringLocked: gameState.answeringLocked,
     hasSubmittedBet: gameState.answers[playerId]?.bet !== undefined,
     hasSubmittedAnswer: !!gameState.answers[playerId]?.answer,
     isGraded: !!gameState.answers[playerId]?.graded,
@@ -330,10 +439,15 @@ app.get('/api/player/state/:playerId', (req, res) => {
     spotlightPlayerName: gameState.spotlightPlayerId ? gameState.players[gameState.spotlightPlayerId]?.name : null,
     hasSubmittedPrediction: !!gameState.spotlightPredictions[playerId],
     spotlightResult: gameState.spotlightResult,
+    pokerBet: gameState.pokerBets[playerId],
+    pokerPot: gameState.pokerPot,
+    pokerResult: gameState.pokerResult,
     result: gameState.answers[playerId] ? {
       correct: gameState.answers[playerId].correct,
       bet: gameState.answers[playerId].bet,
-      pointsChange: gameState.answers[playerId].pointsChange
+      pointsChange: gameState.answers[playerId].pointsChange,
+      pokerWinnings: gameState.answers[playerId].pokerWinnings,
+      pokerLoss: gameState.answers[playerId].pokerLoss
     } : null
   });
 });
@@ -349,6 +463,12 @@ app.post('/api/player/submit-bet', (req, res) => {
 
 app.post('/api/player/submit-answer', (req, res) => {
   const { playerId, answer, timeTaken } = req.body;
+  
+  // Check if answering is locked
+  if (gameState.answeringLocked) {
+    return res.status(403).json({ error: 'Answering period has ended' });
+  }
+  
   if (!gameState.answers[playerId]) {
     gameState.answers[playerId] = {};
   }
